@@ -1,108 +1,103 @@
 import streamlit as st
-import smtplib
-from email.mime.text import MIMEText
-from email.header import Header
+import tensorflow as tf
+import numpy as np
+from PIL import Image
+import json
+from groq import Groq
+import os
 
-# Título
-st.title("Servicio de Soporte Técnico en la Nube")
+# ======================
+# CONFIGURACIÓN
+# ======================
+st.set_page_config(
+    page_title="Detección de Enfermedades en Hojas de Café",
+    page_icon="🍃",
+    layout="centered"
+)
 
-# 1. Usuario completa el formulario
-with st.form("form_reporte"):
+# Cargar modelo y clases
+@st.cache_resource
+def load_model():
+    model = tf.keras.models.load_model("mejor_modelo.keras")
+    with open("clases.json", "r") as f:
+        clases = json.load(f)
+    return model, clases
 
-    nombre = st.text_input("Nombre del usuario")
+model, clases = load_model()
 
-    correo_usuario = st.text_input("Correo del usuario")
+# Cliente de Groq (usa variable de entorno o pega tu API key)
+GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY", ""))
 
-    tipo_problema = st.selectbox(
-        "Tipo de problema",
-        ["Conexión", "Aplicación", "Cuenta", "Otro"]
-    )
+def obtener_recomendaciones(enfermedad, confianza):
+    if not GROQ_API_KEY:
+        return "No se configuró la API Key de Groq."
 
-    prioridad = st.selectbox(
-        "Prioridad",
-        ["Alta", "Media", "Baja"]
-    )
+    client = Groq(api_key=GROQ_API_KEY)
 
-    descripcion = st.text_area(
-        "Descripción de la incidencia"
-    )
+    prompt = f"""
+    Eres un experto agrónomo especializado en cultivos de café.
+    La hoja de café ha sido diagnosticada con la siguiente enfermedad: **{enfermedad}**
+    con un nivel de confianza del {confianza:.1f}%.
 
-    enviar = st.form_submit_button("ENVIAR REPORTE")
+    Genera una respuesta clara, profesional y práctica en español con estas secciones:
 
+    1. **Descripción de la enfermedad**: qué es y cómo afecta a la planta.
+    2. **Recomendaciones técnicas de manejo preventivo**.
+    3. **Buenas prácticas para el cuidado del cultivo**.
+    4. **Acciones de seguimiento y monitoreo**.
 
-# 2. Validación y envío
-if enviar:
+    Usa un lenguaje técnico pero comprensible para agricultores.
+    """
 
-    if nombre and correo_usuario and descripcion:
-
-        # Preparar mensaje
-        mensaje = f"""
-Nuevo reporte de soporte técnico:
-
-- Usuario: {nombre}
-- Correo: {correo_usuario}
-- Tipo de problema: {tipo_problema}
-- Prioridad: {prioridad}
-- Descripción: {descripcion}
-"""
-
-        # Configuración de correo usando secrets
-        remitente = st.secrets["email"]["user"]
-        clave = st.secrets["email"]["password"]
-        destinatario = st.secrets["email"]["admin"]
-
-        # Crear mensaje con codificación UTF-8
-        msg = MIMEText(mensaje, "plain", "utf-8")
-
-        # Asunto con soporte para tildes y ñ
-        msg["Subject"] = Header(
-            "Nuevo reporte de soporte técnico",
-            "utf-8"
+    try:
+        chat_completion = client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            model="llama-3.3-70b-versatile",
+            temperature=0.4,
+            max_tokens=1000
         )
+        return chat_completion.choices[0].message.content
+    except Exception as e:
+        return f"Error al conectar con Groq: {str(e)}"
 
-        msg["From"] = remitente
-        msg["To"] = destinatario
+# ======================
+# INTERFAZ
+# ======================
+st.title("Detección de Enfermedades en Hojas de Café")
+st.markdown("Sube una foto de una hoja de café y el sistema detectará posibles enfermedades usando Inteligencia Artificial.")
 
-        try:
+uploaded_file = st.file_uploader("Selecciona una imagen de hoja de café", type=["jpg", "jpeg", "png"])
 
-            # Conexión SMTP con Gmail
-            server = smtplib.SMTP(
-                "smtp.gmail.com",
-                587
-            )
+if uploaded_file is not None:
+    # Mostrar imagen
+    image = Image.open(uploaded_file).convert("RGB")
+    st.image(image, caption="Imagen cargada", use_container_width=True)
 
-            # Seguridad TLS
-            server.starttls()
+    # Preprocesar
+    img = image.resize((224, 224))
+    img_array = np.array(img) / 255.0
+    img_array = np.expand_dims(img_array, axis=0)
 
-            # Iniciar sesión
-            server.login(
-                remitente,
-                clave
-            )
+    # Predicción
+    prediccion = model.predict(img_array, verbose=0)
+    clase_idx = np.argmax(prediccion)
+    confianza = float(np.max(prediccion) * 100)
+    enfermedad = clases[str(clase_idx)]
 
-            # Enviar correo
-            server.sendmail(
-                remitente,
-                destinatario,
-                msg.as_string()
-            )
+    # Resultados
+    st.success(f"**Enfermedad detectada:** {enfermedad}")
+    st.info(f"**Confianza:** {confianza:.2f}%")
 
-            # Cerrar conexión
-            server.quit()
+    # Barra de progreso
+    st.progress(confianza / 100)
 
-            st.success(
-                "¡Reporte enviado correctamente! "
-                "Su reporte ha sido enviado al administrador."
-            )
+    # Recomendaciones con Groq
+    with st.spinner("Generando recomendaciones técnicas con IA..."):
+        recomendaciones = obtener_recomendaciones(enfermedad, confianza)
+        st.markdown("---")
+        st.subheader("Recomendaciones Técnicas")
+        st.markdown(recomendaciones)
 
-        except Exception as e:
+else:
+    st.info("Sube una imagen para comenzar el diagnóstico.")
 
-            st.error(
-                f"Error al enviar el reporte: {e}"
-            )
-
-    else:
-
-        st.warning(
-            "Por favor complete todos los campos obligatorios."
-        )
