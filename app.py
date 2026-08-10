@@ -10,7 +10,7 @@ import os
 # CONFIGURACIÓN
 # ======================
 st.set_page_config(
-    page_title="Detección de Enfermedades en Hojas de Café",
+    page_title="Detección de Enfermedades en Hojas de Café / Meilyn Castillo 202310060207",
     page_icon="🍃",
     layout="centered"
 )
